@@ -11,7 +11,7 @@ macOS / Android / HarmonyOS NEXT 三端原生客户端，共用一套「UDP 广�
 
 - [最新 Release](https://github.com/wchhhhhhhhhhhhh/LanDrop/releases/latest)
 - **macOS**：`LanDrop-macOS-1.0.0.zip`（ad-hoc 签名；首次打开如被 Gatekeeper 拦截，请右键 → 打开）
-- **Android**：`LanDrop-Android-1.0.0-debug.apk`（debug 签名，需允许安装未知来源）
+- **Android**：`LanDrop-Android-1.0.0.apk`（release 签名，需允许安装未知来源；装过旧 debug 包请先卸载）
 - **HarmonyOS**：`LanDrop-Harmony-1.0.0-unsigned.hap`（未签名，需自行配置证书签名；实验性适配，见下方说明）
 
 源码：
@@ -77,14 +77,22 @@ cd macos && ./scripts/make_app.sh    # 产出 LanDrop.app
 cd android
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/liberica-jdk-17.jdk/Contents/Home
 export ANDROID_HOME=~/AndroidTools/sdk
+
+# 本机调试：使用 AGP 默认 debug 签名
 ~/AndroidTools/gradle-8.9/bin/gradle assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# 正式包：先准备自己的 release keystore
+cp keystore.properties.example keystore.properties   # 填入 storeFile / 密码
+~/AndroidTools/gradle-8.9/bin/gradle assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 - 前台服务（`dataSync`）保证息屏/切后台仍能接收，通知栏常驻「正在局域网接收文件」。
 - 收件箱：`Android/data/com.landrop.android/files/LanDrop/inbox`，可用系统「打开/分享」导出。
 - 最低 API 26（Android 8.0）。
-- 仓库里的 `android/app/keystore/debug.keystore` 只用于调试安装；正式发布请替换成自己的签名。
+- **正式签名**：`android/keystore/release.keystore` 与 `android/keystore.properties` 已被 `.gitignore` 忽略，不会进仓库；请离线备份，丢失后无法给已安装用户发升级。
+- **签名变更**：从 v1.0.0 起 Android 发行包使用独立 release key；之前装过 debug 包的用户需要卸载后重装。
 - 已接入系统分享：相册/文件管理器 → 分享 → LanDrop，选择设备即可发送。
 
 ## HarmonyOS NEXT

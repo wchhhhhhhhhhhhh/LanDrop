@@ -43,10 +43,13 @@ __pycache__/
 .skills/
 .build/
 
-# signing keys（仅提交调试用的 debug.keystore；正式签名请勿提交）
+# signing keys（release keystore / 密码 / 证书一律不提交）
 android/keystore/
+android/app/keystore/
+android/keystore.properties
 **/keystore/*
-!android/app/keystore/debug.keystore
+**/*.keystore
+**/*.jks
 
 # private dev screenshots
 docs/harmony-*.jpg
