@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+**/.DS_Store
+macos/.build/
+macos/build/
+macos/.cache/
+macos/.tmp/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+android/keystore/
+*.apk
+*.aab
+
+# HarmonyOS
+harmony/.home/
+harmony/.hvigor/
+harmony/.idea/
+harmony/entry/build/
+harmony/oh_modules/
+harmony/build-profile.json5
+harmony/.clangd
+harmony/.clang-format
+harmony/.clang-tidy
+
+# Python / editor / temp
+.venv/
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+*.iml
+*.log
+.tmp-mcp/
+.npmcache/
+.gradle/
+
+# repo-local tooling
+.skills/
+.build/
+
+# signing keys（仅提交调试用的 debug.keystore；正式签名请勿提交）
+android/keystore/
+**/keystore/*
+!android/app/keystore/debug.keystore
+
+# private dev screenshots
+docs/harmony-*.jpg
