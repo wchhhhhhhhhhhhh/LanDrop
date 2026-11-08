@@ -13,6 +13,10 @@ APP="build/LanDrop.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/LanDrop"
+# release 包去掉 DWARF/绝对构建路径，避免把本机用户名和工程路径带进发行版
+if [ "$CONFIG" = "release" ]; then
+  strip -S "$APP/Contents/MacOS/LanDrop" 2>/dev/null || true
+fi
 cp assets/LanDrop.icns "$APP/Contents/Resources/LanDrop.icns"
 if [ -d ".build/$CONFIG/LanDrop_LanDrop.bundle" ]; then
   cp -R ".build/$CONFIG/LanDrop_LanDrop.bundle" "$APP/Contents/Resources/"
