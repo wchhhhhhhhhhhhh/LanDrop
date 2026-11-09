@@ -47,6 +47,7 @@ __pycache__/
 .gradle/
 
 # repo-local tooling
+.serve/
 .skills/
 .build/
 

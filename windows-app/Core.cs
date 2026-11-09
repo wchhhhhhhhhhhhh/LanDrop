@@ -589,7 +589,7 @@ public sealed class HttpServer : IDisposable
                         id = _cfg.Id,
                         name = _cfg.Name,
                         platform = "windows",
-                        version = "1.1.0",
+                        version = "2.0.0",
                         port = Port,
                         pin_required = _cfg.PinEnabled,
                         inbox = _inbox.Root,

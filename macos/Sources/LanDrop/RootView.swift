@@ -136,7 +136,7 @@ struct RootView: View {
             Spacer()
             Button("打开收件箱") { model.revealInbox() }
                 .buttonStyle(.link)
-            Text("LanDrop 1.0 · 端口 \(model.port == 0 ? 47823 : model.port)")
+            Text("LanDrop 2.0 · 端口 \(model.port == 0 ? 47823 : model.port)")
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 11))

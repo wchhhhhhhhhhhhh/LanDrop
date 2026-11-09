@@ -10,9 +10,9 @@ macOS / Windows / Android / HarmonyOS NEXT 四端原生客户端，共用一套�
 ## 下载
 
 - [最新 Release](https://github.com/wchhhhhhhhhhhhh/LanDrop/releases/latest)
-- **macOS**：`LanDrop-macOS-1.0.0.zip`（ad-hoc 签名；首次打开如被 Gatekeeper 拦截，请右键 → 打开）
-- **Android**：`LanDrop-Android-1.0.0.apk`（release 签名，需允许安装未知来源；装过旧 debug 包请先卸载）
-- **HarmonyOS**：`LanDrop-Harmony-1.0.0-unsigned.hap`（未签名，需自行配置证书签名；实验性适配，见下方说明）
+- **macOS**：`LanDrop-macOS-2.0.0.zip`（ad-hoc 签名；首次打开如被 Gatekeeper 拦截，请右键 → 打开）
+- **Android**：`LanDrop-Android-2.0.0.apk`（release 签名，需允许安装未知来源；装过旧 debug 包请先卸载）
+- **HarmonyOS**：`LanDrop-Harmony-2.0.0-unsigned.hap`（未签名，需自行配置证书签名；实验性适配，见下方说明）
 
 源码：
 

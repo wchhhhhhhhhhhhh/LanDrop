@@ -1,5 +1,5 @@
 #define AppName "LanDrop"
-#define AppVersion "1.2.0"
+#define AppVersion "2.0.0"
 #define AppExe "LanDrop.exe"
 
 [Setup]
@@ -28,7 +28,7 @@ RestartApplications=no
 Name: "desktopicon"; Description: "创建桌面快捷方式(&D)"; GroupDescription: "附加快捷方式："
 
 [Files]
-Source: "C:\LanDropWinUI\out\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "C:\LanDropUser\out\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

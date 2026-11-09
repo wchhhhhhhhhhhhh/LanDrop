@@ -581,7 +581,7 @@ struct SettingsSheet: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("LanDrop 1.0.0").foregroundStyle(.secondary)
+                        Text("LanDrop 2.0.0").foregroundStyle(.secondary)
                     }
                     HStack {
                         Text("协议")
