@@ -9,7 +9,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 后台保活：开机自启 + 关闭电池优化 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- NFC 贴纸：碰一碰选设备。没有 NFC 的手机也能正常收发，所以 required=false -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
     <application
         android:name=".LanDropApp"
@@ -29,8 +35,22 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
 
-            <!-- 系统分享：相册/文件管理器点“分享”后出现在应用列表里 -->
+        <!--
+            系统分享的二级菜单：
+            相册/文件管理器 → 分享 → LanDrop → 半透明浮层（不切到主界面）
+            同时也是 NFC 碰一碰的落点：贴纸/链接可以直接拉起它
+        -->
+        <activity
+            android:name=".ShareTargetActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.landrop.android.share"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.LanDrop.Sheet"
+            android:windowSoftInputMode="adjustResize">
+
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -41,12 +61,41 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+
+            <!-- 碰贴纸：应用没开也能直接弹出「选择设备/发送」浮层 -->
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="landrop" android:host="tap" />
+            </intent-filter>
+
+            <!-- 贴纸内容也允许当链接打开（二维码/复制粘贴场景） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="landrop" android:host="tap" />
+            </intent-filter>
         </activity>
+
+        <activity
+            android:name=".NfcWriteActivity"
+            android:exported="false" />
 
         <service
             android:name=".service.TransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

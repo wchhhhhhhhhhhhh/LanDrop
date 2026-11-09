@@ -6,4 +6,17 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:navigationBarColor">#FFFFFF</item>
     </style>
+
+    <!-- 分享/碰一碰的浮层：窗口透明，只画自己的卡片，背后保留原来的应用 -->
+    <style name="Theme.LanDrop.Sheet" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">false</item>
+    </style>
 </resources>

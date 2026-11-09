@@ -68,7 +68,7 @@ class PeerClient(private val pin: String? = null) {
         if (total < 0) return UploadOutcome.FAILED
         val fileId = control.fileId
         val name = URLEncoder.encode(displayName, "UTF-8").replace("+", "%20")
-        val chunk = 16 * 1024 * 1024
+        val chunk = 4 * 1024 * 1024
         var offset = control.offset
         var retries = 0
 
@@ -124,7 +124,22 @@ class PeerClient(private val pin: String? = null) {
                     conn.setRequestProperty("X-Offset", offset.toString())
                     conn.setRequestProperty("Content-Type", "application/octet-stream")
                     conn.setFixedLengthStreamingMode(data.size)
-                    conn.outputStream.use { it.write(data) }
+                    conn.outputStream.use { out ->
+                        // 分小块写，慢网下每 150ms 也能刷一次进度，不会长时间停在 0%
+                        var written = 0
+                        var lastEmit = 0L
+                        while (written < data.size) {
+                            if (control.cancelRequested) return UploadOutcome.CANCELLED
+                            val n = minOf(64 * 1024, data.size - written)
+                            out.write(data, written, n)
+                            written += n
+                            val now = System.currentTimeMillis()
+                            if (now - lastEmit >= 150 || written == data.size) {
+                                lastEmit = now
+                                onProgress(offset + written, total)
+                            }
+                        }
+                    }
 
                     val code = conn.responseCode
                     android.util.Log.i("LanDrop", "upload offset=$offset code=$code pinSet=${!pin.isNullOrEmpty()}")
@@ -165,7 +180,7 @@ class PeerClient(private val pin: String? = null) {
 
     /** Range 分块下载 */
     fun download(remote: RemoteFile, peer: Peer, target: File, onProgress: (Long, Long) -> Unit): Boolean {
-        val chunk = 16 * 1024 * 1024L
+        val chunk = 4 * 1024 * 1024L
         var offset = 0L
         target.parentFile?.mkdirs()
         RandomAccessFile(target, "rw").use { raf ->

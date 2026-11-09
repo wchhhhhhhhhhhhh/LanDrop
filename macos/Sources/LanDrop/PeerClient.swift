@@ -34,12 +34,32 @@ final class UploadControl {
     }
 }
 
+/// 上传过程中按 URLSession 实际写出的字节数回调，避免 4 MiB 分块之间长时间没有进度
+private final class UploadProgressSink: NSObject, URLSessionTaskDelegate {
+    var onSend: ((Int64) -> Void)?
+    private var lastEmit = Date.distantPast
+    private let lock = NSLock()
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+                    totalBytesExpectedToSend: Int64) {
+        lock.lock()
+        let now = Date()
+        let emit = now.timeIntervalSince(lastEmit) >= 0.08
+        if emit { lastEmit = now }
+        let callback = emit ? onSend : nil
+        lock.unlock()
+        callback?(totalBytesSent)
+    }
+}
+
 /// 对端 HTTP 客户端：上传（分块续传）/ 下载（Range 分块）/ 文本
 struct PeerClient {
     var pin: String?
     var session: URLSession = .shared
 
-    private let chunkSize = 16 * 1024 * 1024
+    /// 4 MiB：断点续传粒度和进度刷新的折中（README 一直写的就是 4 MiB）
+    private let chunkSize = 4 * 1024 * 1024
 
     private func makeRequest(_ url: URL, method: String, headers: [String: String] = [:], body: Data? = nil) -> URLRequest {
         var req = URLRequest(url: url)
@@ -122,6 +142,11 @@ struct PeerClient {
         var offset: Int64 = control.offset
         var retries = 0
 
+        // 整个上传只建一个带 delegate 的 session，逐块复用它
+        let sink = UploadProgressSink()
+        let progressSession = URLSession(configuration: .ephemeral, delegate: sink, delegateQueue: nil)
+        defer { progressSession.finishTasksAndInvalidate() }
+
         while offset < total {
             if control.cancelRequested { return .cancelled }
             if control.pauseRequested {
@@ -139,9 +164,10 @@ struct PeerClient {
                 "Content-Type": "application/octet-stream",
             ]
             let req = makeRequest(peer.baseURL.appendingPathComponent("v1/upload"),
-                                  method: "POST", headers: headers, body: chunk)
+                                  method: "POST", headers: headers)
+            sink.onSend = { sent in progress(offset + sent, total) }
             do {
-                let (data, resp) = try await session.data(for: req)
+                let (data, resp) = try await progressSession.upload(for: req, from: chunk)
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if code == 409,
                    let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

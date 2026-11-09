@@ -21,6 +21,8 @@ final class AppModel: ObservableObject {
     // 界面
     @Published var selectedPeerID: String?
     @Published var showSettings = false
+    @Published var showNFCSticker = false
+    @Published var launchAtLogin = LaunchAtLogin.isEnabled
     @Published var showTextComposer = false
     @Published var browsePeer: Peer?
     @Published var manualAdd = false
@@ -67,6 +69,7 @@ final class AppModel: ObservableObject {
         store.onReceive = { [weak self] item in
             guard let self else { return }
             self.files.insert(item, at: 0)
+            self.attachReceivedURL(item)
             self.playSound()
             self.toast = "收到 \(item.name)"
             self.refreshFiles()
@@ -122,6 +125,7 @@ final class AppModel: ObservableObject {
         discovery.start()
         discovery.probe()
         refreshFiles()
+        autoEnableLaunchAtLoginIfNeeded()
 
         let prune = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.prunePeers() }
@@ -147,6 +151,43 @@ final class AppModel: ObservableObject {
     }
 
     func toggleServer() { isRunning ? stop() : start() }
+
+    /// 设置里的「登录时自动启动」
+    func setLaunchAtLogin(_ enabled: Bool) {
+        if let error = LaunchAtLogin.set(enabled) {
+            toast = "自启动设置失败：\(error)"
+            launchAtLogin = LaunchAtLogin.isEnabled
+            return
+        }
+        UserDefaults.standard.set(true, forKey: "landrop.launchAtLoginTouched")
+        launchAtLogin = LaunchAtLogin.isEnabled
+        toast = enabled ? "已开启登录时自动启动" : "已关闭自动启动"
+    }
+
+    /// 第一次从「应用程序」运行时默认开启；build 目录里的调试包不注册，免得写入无效路径
+    private func autoEnableLaunchAtLoginIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "landrop.launchAtLoginTouched") else { return }
+        let path = Bundle.main.bundlePath
+        // 只有装进「应用程序」的正式包才默认自启，build 目录里的调试包不注册
+        guard path.hasPrefix("/Applications/") || path.hasPrefix(NSHomeDirectory() + "/Applications/") else { return }
+        defaults.set(true, forKey: "landrop.launchAtLoginTouched")
+        if LaunchAtLogin.set(true) == nil {
+            launchAtLogin = LaunchAtLogin.isEnabled
+        }
+    }
+
+    /// 这台 Mac 的"碰一碰"身份：手机端把它写进贴纸
+    var stickerTarget: LandropTag.Target {
+        LandropTag.Target(
+            id: Config.shared.deviceID,
+            name: deviceName,
+            platform: "macos",
+            host: Net.primaryIP(),
+            port: port == 0 ? Config.shared.port : port,
+            pinRequired: pinEnabled
+        )
+    }
 
     func probeNow() {
         discovery.probe()
@@ -254,7 +295,8 @@ final class AppModel: ObservableObject {
         for url in urls {
             var transfer = Transfer(fileName: url.lastPathComponent,
                                     peerName: peer.name,
-                                    direction: .send)
+                                    direction: .send,
+                                    localURL: url)
             transfer.total = fileSize(url)
             transfers.insert(transfer, at: 0)
             let id = transfer.id
@@ -413,6 +455,7 @@ final class AppModel: ObservableObject {
                         Task { @MainActor in self.updateTransfer(id, sent: got, total: total) }
                     }
                 finishTransfer(id, state: .done)
+                setLocalURL(id, url)
                 toast = "已保存 \(url.lastPathComponent)"
                 refreshFiles()
             } catch {
@@ -440,6 +483,44 @@ final class AppModel: ObservableObject {
             inboundLastTick.removeValue(forKey: fileId)
             toast = "传输已中断（6s 无数据）"
         }
+    }
+
+    // MARK: - 文件操作（悬浮窗）
+
+    /// 收到的文件：把收件箱里的最终路径挂到对应传输记录上（重名时名字会被改成 `(1)`）
+    private func attachReceivedURL(_ item: FileItem) {
+        guard let url = item.localURL else { return }
+        let candidates = transfers.indices.filter {
+            transfers[$0].direction == .receive && transfers[$0].localURL == nil
+        }
+        guard !candidates.isEmpty else { return }
+        let idx = candidates.first { transfers[$0].fileName == item.name } ?? candidates.last!
+        transfers[idx].fileName = item.name
+        transfers[idx].localURL = url
+    }
+
+    private func setLocalURL(_ id: UUID, _ url: URL) {
+        guard let idx = transfers.firstIndex(where: { $0.id == id }) else { return }
+        transfers[idx].localURL = url
+    }
+
+    func copyFile(_ t: Transfer) {
+        guard let url = t.localURL, FileManager.default.fileExists(atPath: url.path) else {
+            toast = "文件已不在了"
+            return
+        }
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.writeObjects([url as NSURL])
+        toast = "已复制 \(url.lastPathComponent)"
+    }
+
+    func revealFile(_ t: Transfer) {
+        guard let url = t.localURL, FileManager.default.fileExists(atPath: url.path) else {
+            toast = "文件已不在了"
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: - 配对码

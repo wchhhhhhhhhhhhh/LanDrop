@@ -1,10 +1,10 @@
 # LanDrop · 局域网文件互传
 
 [![Release](https://img.shields.io/github/v/release/wchhhhhhhhhhhhh/LanDrop?style=flat-square)](https://github.com/wchhhhhhhhhhhhh/LanDrop/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Android%20%7C%20HarmonyOS-0A84FF?style=flat-square)](#)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android%20%7C%20HarmonyOS-0A84FF?style=flat-square)](#)
 [![自愿捐赠](https://img.shields.io/badge/%E8%87%AA%E6%84%BF%E6%8D%90%E8%B5%A0-%E5%BE%AE%E4%BF%A1%E6%94%AF%E4%BB%98-07C160?style=flat-square&logo=wechat&logoColor=white)](DONATE.md)
 
-macOS / Android / HarmonyOS NEXT 三端原生客户端，共用一套「UDP 广播发现 + HTTP/1.1 传输」协议。
+macOS / Windows / Android / HarmonyOS NEXT 四端原生客户端，共用一套「UDP 广播发现 + HTTP/1.1 传输」协议。
 不上云、不登录、不依赖外网，同一 Wi-Fi 下发现即传。
 
 ## 下载
@@ -25,6 +25,8 @@ cd LanDrop
 LanDrop/
 ├── PROTOCOL.md              # 协议规范（发现、接口、断点续传、安全边界）
 ├── macos/                   # Swift + SwiftUI 原生 macOS 客户端（含无界面 CLI 模式）
+├── windows-app/             # C# + WinUI 3 原生 Windows 客户端
+├── installer/               # Windows 安装包（Inno Setup）
 ├── android/                 # Kotlin + Jetpack Compose（前台服务常驻接收）
 ├── harmony/                 # ArkTS + ArkUI（Stage 模型，HarmonyOS 26 / API 26）
 └── .skills/harmony-build/   # 本机实测出来的鸿蒙命令行构建技能
@@ -39,8 +41,13 @@ LanDrop/
 - 浏览/拉取对方收件箱（macOS、Android 已实现）
 - 可选 6 位配对码（固定时间比较 + 连续 10 次错误锁定 60s）
 - 实时传输进度 + 速度（滑动平均），收发双向都有记录
+- 大文件不“假死”：4 MiB 分块 + 块内进度刷新（手机端每 150ms、Mac 端按 URLSession 写出字节数）；
+  手机复制到缓存、连接首包阶段显示「准备中…」，不会长时间停在 0%
 - 发送可「暂停 / 继续 / 取消」：暂停即断点，继续按 `X-Offset` 续传，不重传已发送部分
 - 选择来源双入口：Android 系统图库（Photo Picker）+ 文件管理器（SAF）；macOS 图片面板 / 任意文件
+- **NFC 碰一碰**：在「贴纸」里选设备写入 NTAG 贴纸，之后碰一下贴纸就能发送（见下方说明）
+- **分享二级菜单**：相册/文件 → 分享 → LanDrop → 半透明浮层，选「NFC 碰一碰」或附近设备，不跳主界面
+- 碰贴纸可直接拉起发送浮层（LanDrop 没打开也行）
 
 ## 协议速览
 
@@ -71,6 +78,28 @@ swift build            # 需要完整 Xcode（SwiftUI 宏）
 cd macos && ./scripts/make_app.sh    # 产出 LanDrop.app
 ```
 
+- **文件操作**：右上角浮窗和「传输记录」里的每个完成项都能直接「复制」（可粘贴到 Finder）或「打开位置」
+  （Finder 中显示）；浮窗鼠标移上去不会自动消失，最多同时显示 3 个完成项，右键还能「拷贝路径」。
+- **NFC 贴纸面板**：顶栏「贴纸」查看本机贴纸内容（名字、地址、端口、字节数），可一键复制。
+  macOS 没有开放的 NFC 读卡接口，Mac **不能**碰贴纸、也写不了贴纸；贴纸由手机端写入，
+  手机碰贴纸后走原有 HTTP 传输。没有手机端时，也可以把复制出来的内容粘进任意 NDEF 写入 App（URI 记录）。
+
+## Windows（WinUI 3）
+
+```powershell
+# 需要 Visual Studio 2022/2026（含 UWP 工作负载）+ .NET 10 和 Windows App SDK 1.8 Runtime
+msbuild windows-app\LanDrop.csproj /restore /t:Publish `
+  /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win-x64 `
+  /p:SelfContained=true /p:WindowsAppSDKSelfContained=false /p:PublishDir=windows-app\out\
+
+# WinUI 未打包模式只认 resources.pri，构建产物叫 LanDrop.pri，需要补一份
+copy windows-app\out\LanDrop.pri windows-app\out\resources.pri
+```
+
+- 运行前安装 **Windows App Runtime 1.8**（框架依赖；自包含模式在部分虚拟机上会在托管代码前挂掉）。
+- 安装包：`installer\LanDrop.iss` + `instaler\build-installer.ps1`（Inno Setup，装到 `Program Files\LanDrop`，带开始菜单/桌面快捷方式和卸载项）。
+- 功能与 macOS 对齐：设备发现、收发文件/文本、进度、收件箱、复制/在文件夹中显示、开机自启、NFC 贴纸内容生成、捐赠入口。
+
 ## Android
 
 ```bash
@@ -93,7 +122,14 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 - 最低 API 26（Android 8.0）。
 - **正式签名**：`android/keystore/release.keystore` 与 `android/keystore.properties` 已被 `.gitignore` 忽略，不会进仓库；请离线备份，丢失后无法给已安装用户发升级。
 - **签名变更**：从 v1.0.0 起 Android 发行包使用独立 release key；之前装过 debug 包的用户需要卸载后重装。
-- 已接入系统分享：相册/文件管理器 → 分享 → LanDrop，选择设备即可发送。
+- 已接入系统分享：相册/文件管理器 → 分享 → LanDrop，弹出半透明二级菜单（背后还是相册），
+  选「NFC 碰一碰」或附近设备即可发送，不会跳到主界面。
+- **NFC 贴纸**：顶部「贴纸」→ 选本机或附近设备 → 把 NTAG213 及以上贴纸靠近手机背面写入。
+  写好后：相册/文件 → 分享 → LanDrop → **NFC 碰一碰** → 碰贴纸即发送；
+  也可以直接碰贴纸，弹出「选择图片/文件」浮层再发送。
+- 贴纸只写设备名、局域网地址、端口和「是否需要配对码」，**不写配对码**；
+  读取时只接受私网地址，并会用 `GET /v1/info` 校验设备 id，防止贴纸过期/被改写。
+
 
 ## HarmonyOS NEXT
 
@@ -132,6 +168,12 @@ export HOME="$PWD/.home"
 | 安卓接收 100MB | curl 直传 | ✅ 落地 104857600 字节 |
 | 图库选择器 | 系统 PhotoPicker | ✅ 打开并回传 URI |
 | 接收进度/速度 | 手机 UI | ✅ 显示 `42% · 6.9 MB/s` |
+| Release 覆盖安装 | `adb install -r` | ✅ vivo V2199A（同签名升级，数据保留） |
+| 分享二级菜单 | 相册 → 分享 → LanDrop | ✅ 半透明浮层，背后仍是相册 |
+| NFC 贴纸页面 | 手机 UI | ✅ 目标选择 / 写入页 / NFC 状态 |
+| 实体贴纸写入 | 手机 + 贴纸 | ✅ 写入成功（vivo V2199A） |
+| 碰贴纸拉起浮层 | `ACTION_NDEF_DISCOVERED` | ✅ 直接进发送浮层，不经过主界面 |
+| 分享 → 碰贴纸 → 发送 | 手机 + 贴纸 | ✅ 派发链路走通，文件到达 macOS 收件箱（adb 模拟碰贴纸） |
 
 ## 自愿捐赠
 
@@ -149,3 +191,5 @@ LanDrop 免费、无广告、不登录、不上传云端。如果它帮到了你
 - 鸿蒙端为前台运行，暂未接入 `ContinuousTask` 后台长时任务。
 - 广播发现依赖同一网段；跨网段请用「手动输入 IP」（macOS 已提供入口）。
 - Windows 只是还没时间做，正在开发中，很快上线；iOS 暂未实现。协议与实现解耦，补客户端只需按 PROTOCOL.md 实现 HTTP 侧。
+- NFC 碰一碰需要实体 NTAG213/215 贴纸；Mac 无 NFC 读卡硬件，只能作为"被碰"的目标。
+- NFC 只负责"选设备"，传输仍是局域网 HTTP；贴纸内容被改写时会在碰一碰后校验出来。

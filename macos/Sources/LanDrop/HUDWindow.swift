@@ -2,12 +2,23 @@ import SwiftUI
 import AppKit
 import Combine
 
+/// 非激活浮窗默认拿不到第一次点击（按钮要点两下/没反应），这里两个子类一起放开
+private final class HUDPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class HUDHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// 桌面右上角置顶传输浮窗：显示进度 / 速度，可直接取消
 @MainActor
 final class HUDController {
     private var panel: NSPanel?
     private var cancellable: AnyCancellable?
     private var hideWork: DispatchWorkItem?
+    private var hovered = false
     private weak var model: AppModel?
 
     private let width: CGFloat = 340
@@ -29,25 +40,41 @@ final class HUDController {
         let running = transfers.contains { $0.state == .running || $0.state == .paused }
         if running {
             hideWork?.cancel()
+            hideWork = nil
             show(with: transfers)
         } else if panel?.isVisible == true {
-            // 结束后停留 2.5s 让用户看到「已完成」
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                if !(self.model?.transfers.contains { $0.state == .running } ?? false) {
-                    self.hide()
-                }
-            }
-            hideWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+            // 结束后停留几秒，方便点「复制 / 打开位置」；鼠标在浮窗上时不动
             show(with: transfers)
+            scheduleHide(after: 5.0)
         }
+    }
+
+    /// 鼠标进入浮窗时暂停自动隐藏，离开后再给 1.2s
+    func setHovered(_ value: Bool) {
+        hovered = value
+        if value {
+            hideWork?.cancel()
+            hideWork = nil
+        } else if !(model?.transfers.contains { $0.state == .running || $0.state == .paused } ?? false) {
+            scheduleHide(after: 1.2)
+        }
+    }
+
+    private func scheduleHide(after seconds: Double) {
+        guard !hovered else { return }
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.hovered else { return }
+            self.hide()
+        }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     private func show(with transfers: [Transfer]) {
         let panel = ensurePanel()
         let view = HUDView(model: model!, transfers: transfers)
-        let host = NSHostingView(rootView: view)
+        let host = HUDHostingView(rootView: view)
         host.frame.size = host.fittingSize
         host.wantsLayer = true
         host.layer?.backgroundColor = NSColor.clear.cgColor
@@ -92,10 +119,10 @@ final class HUDController {
 
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
-        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
-                        styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered,
-                        defer: false)
+        let p = HUDPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 160),
+                         styleMask: [.borderless, .nonactivatingPanel],
+                         backing: .buffered,
+                         defer: false)
         p.level = .screenSaver                    // 压过普通窗口与第三方浮层
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         p.isOpaque = false
@@ -121,7 +148,7 @@ struct HUDView: View {
     }
 
     private var recent: [Transfer] {
-        Array(transfers.filter { $0.state != .running && $0.state != .paused }.prefix(1))
+        Array(transfers.filter { $0.state != .running && $0.state != .paused }.prefix(3))
     }
 
     var body: some View {
@@ -148,6 +175,7 @@ struct HUDView: View {
         .padding(14)
         .frame(width: 320, alignment: .leading)
         .padding(10)
+        .onHover { model.hud.setHovered($0) }
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(.ultraThickMaterial)
@@ -164,12 +192,17 @@ struct HUDView: View {
 struct HUDRow: View {
     @ObservedObject var model: AppModel
     let transfer: Transfer
+    @State private var copied = false
+    @State private var copyToken = 0
 
     private var isActive: Bool { transfer.state == .running || transfer.state == .paused }
 
     private var statusText: String {
         switch transfer.state {
-        case .running: return "\(Int(transfer.progress * 100))% · \(transfer.speedText)"
+        case .running:
+            return transfer.sent == 0
+                ? "准备中…"
+                : "\(Int(transfer.progress * 100))% · \(transfer.speedText)"
         case .paused: return "已暂停 · \(Int(transfer.progress * 100))%"
         case .done: return "完成 · \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))"
         case .cancelled: return "已取消"
@@ -217,6 +250,38 @@ struct HUDRow: View {
                 Text(statusText)
                     .font(.system(size: 9.5))
                     .foregroundStyle(transfer.state == .failed ? .red : .secondary)
+            }
+
+            if transfer.state == .done, transfer.localURL != nil {
+                HStack(spacing: 10) {
+                    Button {
+                        model.copyFile(transfer)
+                        copyToken += 1
+                        let token = copyToken
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.62)) {
+                            copied = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            guard token == copyToken else { return }
+                            withAnimation(.easeOut(duration: 0.25)) { copied = false }
+                        }
+                    } label: {
+                        Label(copied ? "已复制" : "复制",
+                              systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                            .scaleEffect(copied ? 1.1 : 1)
+                            .foregroundStyle(copied ? Color.green : Color.accentColor)
+                    }
+                    .help("复制文件，可直接粘贴到 Finder")
+
+                    Button {
+                        model.revealFile(transfer)
+                    } label: {
+                        Label("打开位置", systemImage: "folder")
+                    }
+                    .help("在 Finder 中显示")
+                }
+                .font(.system(size: 9.5, weight: .medium))
+                .buttonStyle(.borderless)
             }
         }
     }

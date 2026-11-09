@@ -52,18 +52,6 @@ object LanDropCore {
     /** 401 时请求 UI 弹配对码框；transferId 非空表示可原地重试 */
     data class PinRequest(val peer: Peer, val transferId: String)
     val pinRequest = MutableStateFlow<PinRequest?>(null)
-    /** 系统分享（相册/文件管理器 → 分享 → LanDrop）带进来的内容 */
-    data class SharePayload(val uris: List<Uri>, val text: String?)
-    val sharePayload = MutableStateFlow<SharePayload?>(null)
-
-    fun submitShare(uris: List<Uri>, text: String?) {
-        if (uris.isEmpty() && text.isNullOrBlank()) return
-        sharePayload.value = SharePayload(uris, text)
-    }
-
-    fun clearShare() {
-        sharePayload.value = null
-    }
 
     var deviceId: String = ""
         private set
@@ -143,7 +131,7 @@ object LanDropCore {
         server = srv
         port.value = bound
         localIp.value = NetInfo.localIp()
-        discovery = Discovery(deviceId, { beacon() }, { peer -> upsert(peer) }).also { it.start() }
+        discovery = Discovery(deviceId, { beacon() }, { peer -> upsertPeer(peer) }).also { it.start() }
         running.value = true
         status.value = "正在接收 · ${localIp.value}:$bound"
         return true
@@ -170,12 +158,16 @@ object LanDropCore {
         .put("port", port.value)
         .put("pin_required", pinEnabled)
 
-    private fun upsert(peer: Peer) {
+    /** 发现到的 / 贴纸里读到的设备都走这里登记，UI 立刻能看到 */
+    fun upsertPeer(peer: Peer) {
         val list = peers.value.toMutableList()
         val idx = list.indexOfFirst { it.id == peer.id }
         if (idx >= 0) list[idx] = peer else list.add(peer)
         peers.value = list.sortedBy { it.name }
     }
+
+    /** 之前给这台设备存过的配对码（贴纸带着设备 id，碰一碰可以直接复用） */
+    fun storedPin(peerId: String): String? = peerPins[peerId]
 
     fun prune() {
         // 接收看门狗：15s 无数据判定对端断开
@@ -197,25 +189,37 @@ object LanDropCore {
 
     // MARK: 发送
 
-    fun sendFiles(uris: List<Uri>, peer: Peer) {
+    /** 返回本次创建的传输 id，分享浮层用它跟踪进度 */
+    fun sendFiles(uris: List<Uri>, peer: Peer): List<String> {
+        val ids = ArrayList<String>(uris.size)
         for (uri in uris) {
             val (name, size) = describe(uri)
-            val transfer = Transfer(fileName = name, peerName = peer.name, direction = "send", total = size)
+            val transfer = Transfer(
+                fileName = name, peerName = peer.name, direction = "send",
+                total = size, state = "preparing"
+            )
             transfers.value = listOf(transfer) + transfers.value
+            ids.add(transfer.id)
             scope.launch {
                 val local = copyToCache(uri, name, transfer.id)
                 if (local == null) {
                     update(transfer.id) { it.state = "failed"; it.error = "无法读取文件" }
                     return@launch
                 }
+                // 大文件复制到缓存期间用户可能已经取消
+                if (transfers.value.firstOrNull { it.id == transfer.id }?.state == "cancelled") {
+                    local.delete()
+                    return@launch
+                }
                 val control = UploadControl(UUID.randomUUID().toString().replace("-", ""))
                 controls[transfer.id] = control
                 localFiles[transfer.id] = local
                 peerOf[transfer.id] = peer
-                update(transfer.id) { it.total = local.length() }
+                update(transfer.id) { it.state = "running"; it.total = local.length() }
                 runUpload(transfer.id, peer, control)
             }
         }
+        return ids
     }
 
     private fun runUpload(transferId: String, peer: Peer, control: UploadControl) {
@@ -485,6 +489,79 @@ object LanDropCore {
     }
 
     fun flashDrop(peerId: String) { dropFlash.value = peerId }
+
+    // MARK: 贴纸去重
+
+    private var lastTagUid: String? = null
+    private var lastTagAt = 0L
+
+    /** 同一张贴纸在感应区停留时，系统可能反复派发；按 UID + 时间窗口去重 */
+    fun markTag(uid: String) {
+        lastTagUid = uid
+        lastTagAt = System.currentTimeMillis()
+    }
+
+    fun isTagRepeat(uid: String, windowMs: Long = 12_000): Boolean =
+        uid == lastTagUid && System.currentTimeMillis() - lastTagAt < windowMs
+
+    // MARK: 后台保活
+
+    /** true = 已关闭电池优化，系统不会因省电随时杀掉后台接收 */
+    fun ignoringBatteryOptimizations(): Boolean = runCatching {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    }.getOrDefault(false)
+
+    fun requestIgnoreBatteryOptimizations() {
+        val direct = android.content.Intent(
+            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:" + context.packageName)
+        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (runCatching { context.startActivity(direct) }.isFailure) {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
+    }
+
+    /** 国产 ROM 的「自启动」管理页：挨个试，都不行就退回应用详情 */
+    fun openAutoStartSettings() {
+        val candidates = listOf(
+            "com.vivo.permissionmanager/.activity.BgStartUpManagerActivity",
+            "com.iqoo.secure/.ui.phoneoptimize.BgStartUpManager",
+            "com.vivo.abe/.ui.autostart.AutostartManagementActivity",
+            "com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity",
+            "com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity",
+            "com.coloros.safecenter/.permission.startup.StartupAppListActivity",
+            "com.oppo.safe/.permission.startup.StartupAppListActivity"
+        )
+        for (raw in candidates) {
+            val parts = raw.split('/')
+            if (parts.size != 2) continue
+            val intent = android.content.Intent()
+                .setComponent(android.content.ComponentName(parts[0], parts[1]))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { context.startActivity(intent) }.isSuccess) return
+        }
+        runCatching {
+            context.startActivity(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + context.packageName)
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+    }
+
+    /** 首次启动的后台保活提示只弹一次 */
+    fun bgPromptSeen(): Boolean = prefs.getBoolean("bgPromptSeen", false)
+
+    fun markBgPromptSeen() {
+        prefs.edit().putBoolean("bgPromptSeen", true).apply()
+    }
 
     /** 是否已获得「所有文件访问」权限 */
     fun hasAllFilesAccess(): Boolean =

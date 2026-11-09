@@ -23,6 +23,9 @@ struct RootView: View {
         .sheet(isPresented: $model.showSettings) {
             SettingsSheet().environmentObject(model)
         }
+        .sheet(isPresented: $model.showNFCSticker) {
+            NFCStickerSheet().environmentObject(model)
+        }
         .sheet(isPresented: $model.showTextComposer) {
             TextComposerSheet().environmentObject(model)
         }
@@ -76,6 +79,13 @@ struct RootView: View {
             }
 
             Spacer()
+
+            Button {
+                model.showNFCSticker = true
+            } label: {
+                Label("贴纸", systemImage: "wave.3.right")
+            }
+            .help("NFC 贴纸：手机碰一下就发到这台 Mac")
 
             Button {
                 model.showTextComposer = true
@@ -247,39 +257,49 @@ struct PeerRow: View {
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
 
-            if hovered || selected {
-                Button {
-                    model.sendClipboard(to: peer)
+            HStack(spacing: 4) {
+                if hovered || selected {
+                    Button {
+                        model.sendClipboard(to: peer)
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .frame(width: 17, height: 17)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help("发送剪贴板文本")
+
+                    Button {
+                        model.pickAndSend(to: peer)
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                            .frame(width: 17, height: 17)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help("发送文件")
+                }
+
+                Menu {
+                    Button("发送文件…") { model.pickAndSend(to: peer) }
+                    Button("发送剪贴板文本") { model.sendClipboard(to: peer) }
+                    Button("浏览对方文件…") { model.browsePeer = peer }
+                    Divider()
+                    Button("测试连通性") {
+                        Task { _ = try? await PeerClient(pin: model.pinFor(peer)).info(peer) }
+                    }
                 } label: {
-                    Image(systemName: "doc.on.clipboard")
+                    Image(systemName: "ellipsis.circle")
+                        .frame(width: 17, height: 17)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
-                .help("发送剪贴板文本")
-
-                Button {
-                    model.pickAndSend(to: peer)
-                } label: {
-                    Image(systemName: "paperplane.fill")
-                }
-                .buttonStyle(.borderless)
-                .help("发送文件")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("更多")
             }
-
-            Menu {
-                Button("发送文件…") { model.pickAndSend(to: peer) }
-                Button("发送剪贴板文本") { model.sendClipboard(to: peer) }
-                Button("浏览对方文件…") { model.browsePeer = peer }
-                Divider()
-                Button("测试连通性") {
-                    Task { _ = try? await PeerClient(pin: model.pinFor(peer)).info(peer) }
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 22)
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 9)

@@ -55,6 +55,9 @@ import com.landrop.android.model.Peer
 import com.landrop.android.model.Platform
 import com.landrop.android.model.Transfer
 import com.landrop.android.model.formatSize
+import com.landrop.android.nfc.NfcSupport
+import com.landrop.android.nfc.TagCodec
+import com.landrop.android.nfc.TagTarget
 import com.landrop.android.service.TransferService
 import kotlinx.coroutines.delay
 
@@ -62,7 +65,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LanDropCore.init(applicationContext)
-        handleShareIntent(intent)
 
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -142,49 +144,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleShareIntent(intent)
-    }
-
-    /** 系统分享：相册/文件管理器点分享 → LanDrop */
-    private fun handleShareIntent(intent: Intent?) {
-        if (intent == null) return
-        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
-
-        val uris = ArrayList<Uri>()
-        fun add(value: Uri?) {
-            if (value == null) return
-            if (value.scheme == "content" || value.scheme == "file") {
-                if (uris.none { it == value }) uris.add(value)
-            }
-        }
-
-        if (intent.action == Intent.ACTION_SEND) {
-            @Suppress("DEPRECATION")
-            val single = if (Build.VERSION.SDK_INT >= 33) {
-                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
-            }
-            add(single)
-        } else {
-            @Suppress("DEPRECATION")
-            val multiple = if (Build.VERSION.SDK_INT >= 33) {
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            } else {
-                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
-            }
-            multiple?.forEach { add(it) }
-        }
-
-        intent.clipData?.let { clip ->
-            for (i in 0 until clip.itemCount) {
-                add(clip.getItemAt(i).uri)
-            }
-        }
-
-        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-            ?: intent.getStringExtra(Intent.EXTRA_TEXT)
-        LanDropCore.submitShare(uris, text)
     }
 }
 
@@ -209,24 +168,27 @@ fun LanDropScreen() {
     val status by LanDropCore.status.collectAsState()
     val ip by LanDropCore.localIp.collectAsState()
     val pinReq by LanDropCore.pinRequest.collectAsState()
-    val sharePayload by LanDropCore.sharePayload.collectAsState()
 
     var tab by remember { mutableIntStateOf(0) }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var showText by remember { mutableStateOf(false) }
+    var showNfc by remember { mutableStateOf(false) }
+    var showBgHint by remember { mutableStateOf(false) }
     var pinPromptFor by remember { mutableStateOf<Peer?>(null) }
 
     val selected: Peer? = peers.firstOrNull { it.id == selectedId } ?: peers.firstOrNull()
-
-    LaunchedEffect(sharePayload != null) {
-        if (sharePayload != null) LanDropCore.probe()
-    }
 
     LaunchedEffect(Unit) {
         while (true) {
             LanDropCore.prune()
             delay(5000)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!LanDropCore.ignoringBatteryOptimizations() && !LanDropCore.bgPromptSeen()) {
+            showBgHint = true
         }
     }
 
@@ -265,6 +227,9 @@ fun LanDropScreen() {
             TopAppBar(
                 title = { Text("LanDrop", fontWeight = FontWeight.Bold) },
                 actions = {
+                    TextButton(onClick = { showNfc = true }) {
+                        Text("贴纸", fontSize = 12.sp, color = Color(0xFF344054))
+                    }
                     TextButton(onClick = { showText = true }) {
                         Text("文本", fontSize = 12.sp, color = Color(0xFF344054))
                     }
@@ -317,6 +282,41 @@ fun LanDropScreen() {
     }
 
     if (showSettings) SettingsDialog(onDismiss = { showSettings = false })
+    if (showBgHint) {
+        AlertDialog(
+            onDismissRequest = { showBgHint = false; LanDropCore.markBgPromptSeen() },
+            title = { Text("让接收服务留在后台") },
+            text = {
+                Text(
+                    "关闭电池优化后，LanDrop 才能在息屏、切后台时持续接收文件；" +
+                        "vivo / 小米 / OPPO 等系统还需要在「自启动」里允许 LanDrop，重启后才不会被拦。",
+                    fontSize = 12.sp, color = sub, lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    LanDropCore.markBgPromptSeen()
+                    showBgHint = false
+                    LanDropCore.requestIgnoreBatteryOptimizations()
+                }) { Text("去关闭") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    LanDropCore.markBgPromptSeen()
+                    showBgHint = false
+                }) { Text("稍后") }
+            }
+        )
+    }
+    if (showNfc) {
+        NfcTargetDialog(
+            onDismiss = { showNfc = false },
+            onPick = { target ->
+                showNfc = false
+                ctx.startActivity(NfcWriteActivity.intent(ctx, target))
+            }
+        )
+    }
     if (showText) {
         TextDialog(
             onDismiss = { showText = false },
@@ -369,25 +369,6 @@ fun LanDropScreen() {
                     android.widget.Toast.makeText(ctx, "配对码已保存，请重新发送", android.widget.Toast.LENGTH_SHORT).show()
                 }
             })
-    }
-
-    sharePayload?.let { payload ->
-        ShareDialog(
-            payload = payload,
-            peers = peers,
-            onDismiss = { LanDropCore.clearShare() },
-            onRefresh = { LanDropCore.probe() },
-            onPick = { peer ->
-                if (payload.uris.isNotEmpty()) {
-                    LanDropCore.sendFiles(payload.uris, peer)
-                } else {
-                    payload.text?.takeIf { it.isNotBlank() }?.let { LanDropCore.sendText(it, peer) }
-                }
-                LanDropCore.clearShare()
-                selectedId = peer.id
-                tab = 2
-            }
-        )
     }
 }
 
@@ -534,6 +515,13 @@ private fun TransfersList(transfers: List<Transfer>) {
                             modifier = Modifier.height(28.dp)
                         ) { Text("✕", fontSize = 13.sp, color = Color(0xFFB42318)) }
                     }
+                    if (t.direction == "send" && t.state == "preparing") {
+                        TextButton(
+                            onClick = { LanDropCore.cancelTransfer(t) },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) { Text("✕", fontSize = 13.sp, color = Color(0xFFB42318)) }
+                    }
                     if (t.direction == "send" && (t.state == "running" || t.state == "paused")) {
                         TextButton(
                             onClick = {
@@ -551,24 +539,35 @@ private fun TransfersList(transfers: List<Transfer>) {
                     }
                 }
                 Spacer(Modifier.height(5.dp))
-                if (t.state == "running" || t.state == "paused") {
+                if (t.state == "running" || t.state == "paused" || t.state == "preparing") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        LinearProgressIndicator(
-                            progress = { t.progress },
-                            modifier = Modifier.weight(1f),
-                            color = if (t.state == "paused") Color(0xFFF59E0B) else Color(0xFF0A84FF)
-                        )
+                        if (t.state == "preparing") {
+                            LinearProgressIndicator(
+                                modifier = Modifier.weight(1f),
+                                color = Color(0xFF0A84FF)
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { t.progress },
+                                modifier = Modifier.weight(1f),
+                                color = if (t.state == "paused") Color(0xFFF59E0B) else Color(0xFF0A84FF)
+                            )
+                        }
                         Spacer(Modifier.width(8.dp))
                         val pct = (t.progress * 100).toInt()
                         val err = t.error
                         Text(
-                            if (t.state == "paused") {
-                                (if (err != null) "$err · $pct%" else "已暂停 · $pct%")
-                            } else {
-                                "$pct% · ${t.speedText}"
+                            when (t.state) {
+                                "preparing" -> "准备中…"
+                                "paused" -> if (err != null) "$err · $pct%" else "已暂停 · $pct%"
+                                else -> "$pct% · ${t.speedText}"
                             },
                             fontSize = 10.sp,
-                            color = if (t.state == "paused") Color(0xFFB45309) else sub
+                            color = when (t.state) {
+                                "preparing" -> sub
+                                "paused" -> Color(0xFFB45309)
+                                else -> sub
+                            }
                         )
                     }
                 } else {
@@ -641,6 +640,38 @@ private fun SettingsDialog(onDismiss: () -> Unit) {
                     }) { Text("换一个") }
                 }
                 Spacer(Modifier.height(12.dp))
+                var batteryExempt by remember { mutableStateOf(LanDropCore.ignoringBatteryOptimizations()) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        batteryExempt = LanDropCore.ignoringBatteryOptimizations()
+                        delay(1500)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("电池优化", fontSize = 14.sp)
+                        Text(
+                            if (batteryExempt) "已关闭，息屏/后台也能持续接收"
+                            else "未关闭，系统可能随时停掉接收服务",
+                            fontSize = 10.sp,
+                            color = if (batteryExempt) Color(0xFF15803D) else Color(0xFFB45309)
+                        )
+                    }
+                    TextButton(onClick = { LanDropCore.requestIgnoreBatteryOptimizations() }) {
+                        Text(if (batteryExempt) "已关闭" else "去关闭")
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("开机自启动", fontSize = 14.sp)
+                        Text(
+                            "重启/升级后自动拉起接收服务；系统里还需允许「自启动」",
+                            fontSize = 10.sp, color = sub
+                        )
+                    }
+                    TextButton(onClick = { LanDropCore.openAutoStartSettings() }) { Text("去开启") }
+                }
+                Spacer(Modifier.height(8.dp))
                 val granted = LanDropCore.hasAllFilesAccess()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -730,67 +761,119 @@ private fun TextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
 }
 
 @Composable
-private fun ShareDialog(
-    payload: LanDropCore.SharePayload,
-    peers: List<Peer>,
-    onDismiss: () -> Unit,
-    onRefresh: () -> Unit,
-    onPick: (Peer) -> Unit
-) {
+private fun NfcTargetDialog(onDismiss: () -> Unit, onPick: (TagTarget) -> Unit) {
+    val ctx = LocalContext.current
+    val peers by LanDropCore.peers.collectAsState()
+    val running by LanDropCore.running.collectAsState()
+    val ip by LanDropCore.localIp.collectAsState()
+    val port by LanDropCore.port.collectAsState()
+    val supported = remember { NfcSupport.available(ctx) }
+
+    val local = TagTarget(
+        id = LanDropCore.deviceId,
+        name = LanDropCore.deviceName,
+        platform = "android",
+        host = ip,
+        port = port,
+        pinRequired = LanDropCore.pinEnabled
+    )
+    val localReady = supported && running && ip != "127.0.0.1"
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("发送到") },
+        title = { Text("NFC 贴纸") },
         text = {
-            Column {
+            Column(Modifier.heightIn(max = 470.dp).verticalScroll(rememberScrollState())) {
                 Text(
-                    if (payload.uris.isNotEmpty()) {
-                        if (payload.uris.size == 1) "1 个文件" else "${payload.uris.size} 个文件"
-                    } else {
-                        "文本：${payload.text.orEmpty().take(60)}"
-                    },
-                    fontSize = 12.sp,
-                    color = sub,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    "选一台设备，把它的信息写进贴纸。之后在相册/文件里分享给 LanDrop，选「NFC 碰一碰」，碰一下贴纸就能发送。",
+                    fontSize = 11.sp, color = sub, lineHeight = 16.sp
                 )
-                Spacer(Modifier.height(8.dp))
+                if (!supported) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "这台手机没有 NFC，写不了贴纸；换成带 NFC 的手机才能写。",
+                        fontSize = 11.sp, color = Color(0xFFB45309)
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("本机", fontSize = 10.sp, color = Color(0xFF98A2B3))
+                Spacer(Modifier.height(4.dp))
+                NfcTargetRow(
+                    icon = "📱",
+                    name = "${LanDropCore.deviceName}（本机）",
+                    detail = if (localReady) "$ip:$port" else "先启动接收并连上 Wi-Fi",
+                    enabled = localReady
+                ) { onPick(local) }
+
+                Spacer(Modifier.height(10.dp))
+                Text("附近设备", fontSize = 10.sp, color = Color(0xFF98A2B3))
+                Spacer(Modifier.height(4.dp))
                 if (peers.isEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("正在搜索附近设备…", fontSize = 12.sp, color = sub)
-                    }
-                    TextButton(onClick = onRefresh) { Text("刷新") }
+                    Text(
+                        "还没有发现设备。确认对方已打开 LanDrop，并与本机在同一 Wi-Fi。",
+                        fontSize = 10.sp, color = Color(0xFF98A2B3), modifier = Modifier.padding(vertical = 6.dp)
+                    )
                 } else {
-                    LazyColumn(Modifier.heightIn(max = 280.dp)) {
-                        items(peers, key = { it.id }) { peer ->
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .clickable { onPick(peer) }
-                                    .padding(vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    if (peer.platform == Platform.MACOS) "💻" else if (peer.platform == Platform.HARMONY) "📲" else "📱",
-                                    fontSize = 16.sp
+                    peers.forEach { peer ->
+                        NfcTargetRow(
+                            icon = if (peer.platform == Platform.MACOS) "💻" else if (peer.platform == Platform.HARMONY) "📲" else "📱",
+                            name = peer.name,
+                            detail = "${peer.platform.label} · ${peer.endpoint}",
+                            enabled = supported
+                        ) {
+                            onPick(
+                                TagTarget(
+                                    id = peer.id,
+                                    name = peer.name,
+                                    platform = peer.platform.name.lowercase(),
+                                    host = peer.host,
+                                    port = peer.port,
+                                    pinRequired = peer.pinRequired
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text(peer.name, fontSize = 13.sp, color = ink, modifier = Modifier.weight(1f))
-                                if (peer.pinRequired) {
-                                    Icon(Icons.Default.Lock, null, Modifier.size(12.dp), tint = Color(0xFFB45309))
-                                }
-                                Spacer(Modifier.width(6.dp))
-                                Text(peer.platform.label, fontSize = 10.sp, color = sub)
-                            }
+                            )
                         }
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "贴纸约 ${TagCodec.ndefBytes(local, withAar = false)} 字节起，NTAG213（144 字节）就够用。" +
+                        "只写设备名、地址和端口，不含配对码。",
+                    fontSize = 10.sp, color = Color(0xFF98A2B3), lineHeight = 15.sp
+                )
             }
         },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+@Composable
+private fun NfcTargetRow(icon: String, name: String, detail: String, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                if (enabled) Color(0xFFF7F8FA) else Color(0xFFF2F4F7),
+                RoundedCornerShape(12.dp)
+            )
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 11.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(icon, fontSize = 16.sp)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name, fontSize = 13.sp, color = if (enabled) ink else sub,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            Text(detail, fontSize = 10.sp, color = Color(0xFF98A2B3), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(
+            if (enabled) "写入 ›" else "不可用",
+            fontSize = 11.sp,
+            color = if (enabled) Color(0xFF0A84FF) else Color(0xFF98A2B3)
+        )
+    }
 }
 
 @Composable

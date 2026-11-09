@@ -143,6 +143,8 @@ struct Transfer: Identifiable {
     var fileName: String
     var peerName: String
     var direction: TransferDirection
+    /// 落到本机磁盘上的文件：接收完成时是收件箱里的文件，发送时是源文件
+    var localURL: URL?
     var sent: Int64 = 0
     var total: Int64 = 0
     var state: TransferState = .running

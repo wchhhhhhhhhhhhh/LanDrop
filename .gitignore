@@ -16,6 +16,13 @@ android/keystore/
 *.apk
 *.aab
 
+# Windows (WinUI 3)
+windows-app/bin/
+windows-app/obj/
+windows-app/out/
+installer/dist/
+*.user
+
 # HarmonyOS
 harmony/.home/
 harmony/.hvigor/

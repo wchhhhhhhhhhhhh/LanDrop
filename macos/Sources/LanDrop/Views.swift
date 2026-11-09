@@ -164,6 +164,24 @@ struct FileRow: View {
 struct TransferRow: View {
     @EnvironmentObject var model: AppModel
     let transfer: Transfer
+    @State private var hovered = false
+    @State private var copied = false
+    @State private var copyToken = 0
+
+    private var canActOnFile: Bool {
+        transfer.state == .done && transfer.localURL != nil
+    }
+
+    private func copyFile() {
+        model.copyFile(transfer)
+        copyToken += 1
+        let token = copyToken
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.62)) { copied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard token == copyToken else { return }
+            withAnimation(.easeOut(duration: 0.25)) { copied = false }
+        }
+    }
 
     private var color: Color {
         switch transfer.state {
@@ -177,7 +195,10 @@ struct TransferRow: View {
 
     private var statusText: String {
         switch transfer.state {
-        case .running: return "\(Int(transfer.progress * 100))% · \(transfer.speedText)"
+        case .running:
+            return transfer.sent == 0
+                ? "准备中…"
+                : "\(Int(transfer.progress * 100))% · \(transfer.speedText)"
         case .paused: return "已暂停 · \(Int(transfer.progress * 100))%"
         case .done: return "完成 · \(ByteCountFormatter.string(fromByteCount: transfer.total, countStyle: .file))"
         case .failed: return transfer.error ?? "失败"
@@ -231,15 +252,53 @@ struct TransferRow: View {
                         .progressViewStyle(.linear)
                         .tint(color)
                 } else {
-                    Text(statusText)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(transfer.state == .failed ? .red : .secondary)
+                    HStack(spacing: 10) {
+                        Text(statusText)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(transfer.state == .failed ? .red : .secondary)
+
+                        if canActOnFile && hovered {
+                            Button(copied ? "已复制" : "复制") { copyFile() }
+                                .buttonStyle(.borderless)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(copied ? Color.green : Color.accentColor)
+                                .scaleEffect(copied ? 1.08 : 1)
+                                .help("复制文件，可直接粘贴到 Finder")
+
+                            Button("打开位置") { model.revealFile(transfer) }
+                                .buttonStyle(.borderless)
+                                .font(.system(size: 10.5))
+                                .help("在 Finder 中显示")
+                        }
+                    }
                 }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color(nsColor: .windowBackgroundColor).opacity(0.7)))
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(hovered
+                      ? Color.accentColor.opacity(0.07)
+                      : Color(nsColor: .windowBackgroundColor).opacity(0.7))
+        )
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .contextMenu {
+            if canActOnFile {
+                Button("复制文件") { copyFile() }
+                Button("在 Finder 中显示") { model.revealFile(transfer) }
+                Button("拷贝路径") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(transfer.localURL?.path ?? "", forType: .string)
+                }
+                Divider()
+            }
+            Button("拷贝文件名") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(transfer.fileName, forType: .string)
+            }
+        }
     }
 }
 
@@ -491,6 +550,16 @@ struct SettingsSheet: View {
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
+                }
+
+                Section("启动") {
+                    Toggle("登录时自动启动", isOn: Binding(
+                        get: { model.launchAtLogin },
+                        set: { model.setLaunchAtLogin($0) }
+                    ))
+                    Text("登录 macOS 后自动打开 LanDrop，方便随时接收文件。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("安全") {
